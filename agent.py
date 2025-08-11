@@ -194,11 +194,11 @@ class TicTacToeEnv(gym.Env):
         if winner == 1:  # 玩家1(X)获胜
             return 1.0
         elif winner == -1:  # 玩家2(O)获胜
-            return -1.0
+            return 1.0
         elif self._is_board_full():  # 平局
             return 0.0
         else:  # 游戏继续
-            return 0.0
+            return -0.01
 
 if __name__ == "__main__":
     # 创建环境

@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import os
+import math
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -16,17 +17,20 @@ target_net.load_state_dict(policy_net.state_dict())
 optimizer = optim.Adam(policy_net.parameters(), lr=1e-4)
 loss_fn = nn.SmoothL1Loss()
 
-replay_buffer = core.ReplayBuffer(capacity=128)
+replay_buffer = core.ReplayBuffer(capacity=1024)
 # batch_size is the number of experiences to sample from the replay buffer
-batch_size = 16
+batch_size = 128
 # TAU is the soft update coefficient for the target network
-TAU = 0.01
+TAU = 0.07
 # gamma is the discount factor as mentioned in the previous section
 gamma = 0.95
 # explore is the exploration rate for the epsilon-greedy policy
-explore_alpha = 0.05
+EPS_START = 0.9
+EPS_END = 0.05
 # train_times is the number of training iterations
-train_times = 50000
+train_times = 30000
+# Global step counter
+g_steps = 0
 
 gym.register(
     id='TicTacToe-v0',
@@ -38,8 +42,10 @@ env_train = gym.make('TicTacToe-v0')
 env_human = gym.make('TicTacToe-v0', render_mode='human')
 
 def select_action(actions, observation, explore: bool = True) -> int:
-    if explore and np.random.rand() < explore_alpha:
-        return np.random.choice(actions)
+    if explore is True:
+        explore_alpha = EPS_END + (EPS_START - EPS_END) * math.exp(-1. * g_steps / (train_times / 10))
+        if np.random.rand() < explore_alpha:
+            return np.random.choice(actions)
 
     state_flat = observation.flatten().astype(np.float32)
     state_tensor = torch.tensor(state_flat, dtype=torch.float32, device=device).unsqueeze(0)
@@ -79,7 +85,7 @@ def create_game(env: gym.Env, explore: bool = True) -> list:
 
         # 如果平局或者分出胜负,将reward传导到倒数第二个状态
         if info["invalid_move"] is False:
-            steps[-2].reward = reward
+            steps[-2].reward = -reward
 
         # 结束一局
         break
@@ -94,10 +100,6 @@ def record_steps(steps, log: bool = True):
             record.player = 1
             record.state = -record.state
             record.next = -record.next
-
-            # 如果是违反游戏规则失败,则无需反转价值
-            if record.reward != -10.0:
-                record.reward = -record.reward
 
     for record in steps:
         record.state = torch.tensor([record.state.flatten().tolist()], dtype=torch.float32, device=device)
@@ -216,7 +218,8 @@ if __name__ == '__main__':
         steps = create_game(env_train)
         record_steps(steps, False)
 
-    for _ in range(train_times):
+    for times in range(train_times):
+        g_steps = times
         steps = create_game(env_train)
         record_steps(steps, False)
         train()
