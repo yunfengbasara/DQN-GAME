@@ -26,7 +26,7 @@ gamma = 0.95
 # explore is the exploration rate for the epsilon-greedy policy
 explore_alpha = 0.05
 # train_times is the number of training iterations
-train_times = 3000
+train_times = 50000
 
 gym.register(
     id='TicTacToe-v0',
@@ -185,8 +185,8 @@ def human_test():
         print("1|2|3")
 
         observation, info = env.reset()
-        while not env.game_over:
-            if env.current_player == human_player:
+        while not info["game_over"]:
+            if info['current_player'] == human_player:
                 action = int(input())
                 # 做个映射 小键盘映射到输入
                 key_mapping = {
@@ -207,9 +207,9 @@ def human_test():
 
 if __name__ == '__main__':
     if os.path.exists("policy_model.pth"):
-        policy_net.load_state_dict(torch.load("policy_model.pth"))
+        policy_net.load_state_dict(torch.load("policy_model.pth", weights_only=True))
     if os.path.exists("target_model.pth"):
-        target_net.load_state_dict(torch.load("target_model.pth"))
+        target_net.load_state_dict(torch.load("target_model.pth", weights_only=True))
 
     # first init
     while len(replay_buffer.buffer) < batch_size:
