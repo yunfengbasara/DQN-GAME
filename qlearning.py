@@ -8,11 +8,8 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 
-from collections import Counter
-
 # Q Table for storing Q-values
 estimation = {}
-visit_counter = Counter()
 
 # learning rate for Q-value updates
 learning_rate = 0.1
@@ -78,6 +75,8 @@ def create_game(env: gym.Env, explore: bool = True) -> list:
         # 如果平局或者分出胜负,将reward传导到倒数第二个状态
         if info["invalid_move"] is False:
             steps[-2].reward = -reward
+        else:
+            steps[-2].reward = 0
 
         # 结束一局
         break
@@ -94,12 +93,10 @@ def record_steps(steps:list, log: bool = True):
 
     for record in steps:
         state_flat = tuple(record.state.flatten())
-        visit_counter[state_flat] += 1
         if state_flat not in estimation:
             estimation[state_flat] = np.zeros(9, dtype=np.float32)
         if record.done is False:
             next_state_flat = tuple(record.next.flatten())
-            visit_counter[next_state_flat] += 1
             if next_state_flat not in estimation:
                 estimation[next_state_flat] = np.zeros(9, dtype=np.float32)  
 
@@ -111,7 +108,7 @@ def record_steps(steps:list, log: bool = True):
         print(f"next_state: {status.next} done:{status.done}")
 
 def train(steps:list):
-    for record in steps:
+    for record in reversed(steps):
         state_flat = tuple(record.state.flatten())
         next_state_flat = tuple(record.next.flatten())
 
@@ -173,11 +170,26 @@ def human_test(fromQTable: bool = True):
 
 # neural network for Q-value approximation
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-policy_net = core.NeuralNetwork().to(device)
+
+class NeuralNetwork(nn.Module):
+    def __init__(self, input_size=9, output_size=9):
+        super(NeuralNetwork, self).__init__()
+        self.fc1 = nn.Linear(input_size, 128)
+        self.fc2 = nn.Linear(128, 256)
+        self.fc3 = nn.Linear(256, 256)
+        self.fc4 = nn.Linear(256, output_size)
+
+    def forward(self, x):
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = F.relu(self.fc3(x))
+        return self.fc4(x)
+
+policy_net = NeuralNetwork().to(device)
 optimizer = optim.Adam(policy_net.parameters(), lr=1e-4)
 loss_fn = nn.SmoothL1Loss()
 
-def optimize_model(min_visits=3, max_epochs=2000, target_r2=0.95):
+def optimize_model(max_epochs=5000, target_r2=0.99):
     size = len(estimation)
     if size == 0:
         return
@@ -185,28 +197,16 @@ def optimize_model(min_visits=3, max_epochs=2000, target_r2=0.95):
     states = []
     targets = []
     for state_flat, q_values in estimation.items():
-        if visit_counter[state_flat] >= min_visits:
-            states.append(np.array(state_flat, dtype=np.float32))
-            targets.append(np.array(q_values, dtype=np.float32))
-
-    if len(states) == 0:
-        print("无足够训练数据，跳过拟合")
-        return
+        states.append(np.array(state_flat, dtype=np.float32))
+        targets.append(np.array(q_values, dtype=np.float32))
 
     states_tensor = torch.tensor(np.stack(states), dtype=torch.float32, device=device)
     targets_tensor = torch.tensor(np.stack(targets), dtype=torch.float32, device=device)
 
     num_samples = states_tensor.size(0)
-    batch_size = min(256, num_samples)
+    batch_size = min(512, num_samples)
 
-    # 构建权重
-    weights = torch.tensor(
-        [visit_counter[state_key] for state_key in estimation.keys()],
-        dtype=torch.float32, device=device
-    )
-    weights /= weights.sum()  # 归一化到 1
-
-    print(f"Q表大小{size} 使用 {num_samples} 条数据 (过滤访问次数 < {min_visits} 的状态)")
+    print(f"Q表大小{size}")
 
     # 调整学习率策略
     old_lrs = [g['lr'] for g in optimizer.param_groups]
@@ -215,7 +215,7 @@ def optimize_model(min_visits=3, max_epochs=2000, target_r2=0.95):
         for g in optimizer.param_groups:
             g['lr'] = lr
 
-    set_lr(3e-3)  # 先快速收敛
+    set_lr(3e-3)
 
     policy_net.train()
 
@@ -229,12 +229,10 @@ def optimize_model(min_visits=3, max_epochs=2000, target_r2=0.95):
             end = min(start + batch_size, num_samples)
             batch_states = states_shuffled[start:end]
             batch_targets = targets_shuffled[start:end]
-            batch_idx = perm[start:end]
 
             optimizer.zero_grad()
             outputs = policy_net(batch_states)
-            loss = (loss_fn(outputs, batch_targets) * weights[batch_idx]).mean()
-            #loss = loss_fn(outputs, batch_targets)
+            loss = loss_fn(outputs, batch_targets)
             loss.backward()
             optimizer.step()
 
@@ -254,10 +252,8 @@ def optimize_model(min_visits=3, max_epochs=2000, target_r2=0.95):
             print(f"Epoch {epoch} | Loss: {avg_loss:.6f} | R²: {r2_value:.4f}")
 
         # 学习率衰减
-        if r2_value < 0.87:
-            set_lr(1e-3)
-        else:
-            set_lr(5e-4)
+        if r2_value > 0.85:
+            set_lr(1e-4) 
 
         if r2_value >= target_r2:
             print(f"达到目标 R²: {r2_value:.4f}")
