@@ -12,14 +12,14 @@ import torch.nn.functional as F
 estimation = {}
 
 # learning rate for Q-value updates
-learning_rate = 0.1
+learning_rate = 0.35
 # gamma is the discount factor as mentioned in the previous section
-gamma = 0.95
+gamma = 0.99
 # explore is the exploration rate for the epsilon-greedy policy
 EPS_START = 0.9
-EPS_END = 0.05
+EPS_END = 0.01
 # train_times is the number of training iterations
-train_times = 30000
+train_times = 20000
 # Global step counter
 g_steps = 0
 
@@ -34,7 +34,10 @@ def select_action(actions, observation, explore: bool = True) -> int:
         return np.random.choice(actions)
     else:
         q_values = estimation[state_flat]
-        return np.argmax(q_values).item()
+        # 创建掩码：非0位置（已有棋子）设为负无穷，0位置（空位）保持原值
+        mask = np.where(observation.flatten() != 0, -np.inf, 0)
+        masked_q_values = q_values + mask
+        return np.argmax(masked_q_values).item()
     
 def select_action_nn(observation) -> int:
     state_flat = observation.flatten().astype(np.float32)
@@ -42,7 +45,12 @@ def select_action_nn(observation) -> int:
     
     with torch.no_grad():
         q_values = policy_net(state_tensor)
-    return q_values.argmax().item()
+    
+    # 创建掩码：非0位置（已有棋子）设为负无穷，0位置（空位）保持原值
+    condition = torch.tensor(observation.flatten() != 0, device=device)
+    mask = torch.where(condition, torch.tensor(-float('inf'), device=device), torch.tensor(0.0, device=device))
+    masked_q_values = q_values.squeeze(0) + mask
+    return masked_q_values.argmax().item()
 
 def create_game(env: gym.Env, explore: bool = True) -> list:
     steps = [core.Status(None, None, None, None, None, None)]
@@ -94,11 +102,21 @@ def record_steps(steps:list, log: bool = True):
     for record in steps:
         state_flat = tuple(record.state.flatten())
         if state_flat not in estimation:
-            estimation[state_flat] = np.zeros(9, dtype=np.float32)
+            # 创建带掩码的Q值数组：非0位置（已有棋子）设为负数
+            q_values = np.full(9, -1, dtype=np.float32)
+            # 将空位置（0位置）设为0，表示可以下子
+            empty_positions = record.state.flatten() == 0
+            q_values[empty_positions] = 0.0
+            estimation[state_flat] = q_values
+            
         if record.done is False:
             next_state_flat = tuple(record.next.flatten())
             if next_state_flat not in estimation:
-                estimation[next_state_flat] = np.zeros(9, dtype=np.float32)  
+                # 为下一个状态也创建带掩码的Q值数组
+                next_q_values = np.full(9, -1, dtype=np.float32)
+                next_empty_positions = record.next.flatten() == 0
+                next_q_values[next_empty_positions] = 0.0
+                estimation[next_state_flat] = next_q_values  
 
     if log is False:
         return
