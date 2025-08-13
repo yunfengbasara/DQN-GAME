@@ -12,12 +12,12 @@ import torch.nn.functional as F
 estimation = {}
 
 # learning rate for Q-value updates
-learning_rate = 0.35
+learning_rate = 0.17
 # gamma is the discount factor as mentioned in the previous section
-gamma = 0.99
+gamma = 0.9
 # explore is the exploration rate for the epsilon-greedy policy
 EPS_START = 0.9
-EPS_END = 0.01
+EPS_END = 0.1
 # train_times is the number of training iterations
 train_times = 20000
 # Global step counter
